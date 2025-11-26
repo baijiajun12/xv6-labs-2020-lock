@@ -9,6 +9,7 @@
 #include "riscv.h"
 #include "defs.h"
 
+
 void freerange(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
@@ -21,12 +22,26 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
-} kmem;
+} kmem[NCPU];
+
+char* kama_locks_nmae[] = {
+  "kmem_cpu0",
+  "kmem_cpu1",
+  "kmem_cpu2",
+  "kmem_cpu3",
+  "kmem_cpu4",
+  "kmem_cpu5",
+  "kmem_cpu6",
+  "kmem_cpu7",
+};
 
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
+  for (int i = 0; i < NCPU; i++)
+  {
+    initlock(&kmem[i].lock,kama_locks_nmae[i]);
+  }
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -55,11 +70,14 @@ kfree(void *pa)
   memset(pa, 1, PGSIZE);
 
   r = (struct run*)pa;
+  push_off();
+  int cpu = cpuid();
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  acquire(&kmem[cpu].lock);
+  r->next = kmem[cpu].freelist;
+  kmem[cpu].freelist = r;
+  release(&kmem[cpu].lock);
+  pop_off();
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -70,12 +88,44 @@ kalloc(void)
 {
   struct run *r;
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+  push_off();
 
+  int cpu = cpuid();
+  if (!kmem[cpu].freelist)           //如果剩余内存没有。进行偷页处理。
+  {
+    int steal_page = 64;
+    for (int i = 0; i < NCPU; i++)
+    {
+      if (i == cpu)
+        continue;
+      acquire(&kmem[i].lock);
+      if (!kmem[i].freelist)
+      {
+        release(&kmem[i].lock);
+        continue;
+      }
+      struct run *rr = kmem[i].freelist;
+      while (rr && steal_page)
+      {
+        kmem[i].freelist = rr->next;
+        rr->next = kmem[cpu].freelist;
+        kmem[cpu].freelist = rr;
+        rr = kmem[i].freelist;
+        steal_page--;
+      }
+      release(&kmem[i].lock);
+      if (steal_page == 0)
+      {
+        break;
+      }
+    }
+  }
+  acquire(&kmem[cpu].lock);
+  r = kmem[cpu].freelist;
+  if(r)
+    kmem[cpu].freelist = r->next;
+  release(&kmem[cpu].lock);
+  pop_off();        //打开中断
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
