@@ -111,25 +111,25 @@ bget(uint dev, uint blockno)
   {
     acquire(&bcache.bufmap_locks[i]);
     uint newfound = 0;      //是否在当前桶找到新的lru buf
-    for (b = bcache.bufmap[i].next ; b ; b = b->next)
+    for (b = &bcache.bufmap[i] ; b->next ; b = b->next)
     {
-      if ((b->refcnt == 0) && ((!before_least) || (b->lastuse < before_least->next->lastuse)))
+      if ((b->refcnt == 0) && ((!before_least) || (b->next->lastuse < before_least->next->lastuse)))
       {
         before_least = b;
         newfound = 1;
       }
-      if (!newfound)            //没有找到要释放当前桶
-      {
-        release(&bcache.bufmap_locks[i]);
-      }
-      else
-      {
-        if (hold_bucket != -1)             //如果找到和之前不同桶，需要释放之前桶
-        {
-          release(&bcache.bufmap_locks[hold_bucket]);
-        }
-        hold_bucket = i;                  //并且记录当前桶
-      }
+    }
+    if (!newfound)            //没有找到要释放当前桶
+    {
+     release(&bcache.bufmap_locks[i]);
+    }
+    else
+    {
+     if (hold_bucket != -1)             //如果找到和之前不同桶，需要释放之前桶
+     {
+      release(&bcache.bufmap_locks[hold_bucket]);
+     }
+     hold_bucket = i;                  //并且记录当前桶
     }
   }
   if (!before_least)  // 没有空间缓存快
